@@ -2,6 +2,7 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 import re
+import traceback
 
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -18,9 +19,12 @@ class handler(BaseHTTPRequestHandler):
         if self.path == '/api/health' or self.path == '/health':
             response = {'status': 'ok', 'message': 'API is running on Vercel'}
         else:
+            # Check if OPENAI_API_KEY is set
+            has_key = bool(os.environ.get('OPENAI_API_KEY'))
             response = {
                 'message': 'Amazon Ads Automation API',
                 'status': 'running',
+                'openai_key_configured': has_key,
                 'endpoints': {
                     'health': 'GET /api/health',
                     'generate': 'POST /api/generate'
@@ -46,14 +50,19 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self._send_cors_headers()
             self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
+            self.wfile.write(json.dumps(response, ensure_ascii=False).encode('utf-8'))
             
         except Exception as e:
+            error_detail = {
+                'error': str(e),
+                'type': type(e).__name__,
+                'traceback': traceback.format_exc()
+            }
             self.send_response(500)
             self.send_header('Content-type', 'application/json')
             self._send_cors_headers()
             self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode())
+            self.wfile.write(json.dumps(error_detail).encode())
     
     def _send_cors_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -77,24 +86,29 @@ class handler(BaseHTTPRequestHandler):
         }
     
     def _handle_generate(self, data):
-        campaign_brief = data.get('campaign_brief', '').strip()
-        
-        if not campaign_brief:
-            return {'error': 'Campaign brief is required'}
-        
-        api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
-            return {'error': 'OPENAI_API_KEY not configured in Vercel environment variables'}
-        
         try:
-            from openai import OpenAI
-        except ImportError as e:
-            return {'error': f'OpenAI import failed: {str(e)}'}
-        
-        client = OpenAI(api_key=api_key)
-        model = os.environ.get('OPENAI_GEN_MODEL', 'gpt-4o-mini')
-        
-        prompt = f"""Based on the following campaign brief, suggest 5 target audience segments for Amazon Ads.
+            campaign_brief = data.get('campaign_brief', '').strip()
+            
+            if not campaign_brief:
+                return {'error': 'Campaign brief is required'}
+            
+            api_key = os.environ.get('OPENAI_API_KEY')
+            if not api_key:
+                return {
+                    'error': 'OPENAI_API_KEY not configured',
+                    'help': 'Go to Vercel Dashboard > Project > Settings > Environment Variables > Add OPENAI_API_KEY'
+                }
+            
+            # Import OpenAI
+            try:
+                from openai import OpenAI
+            except ImportError as e:
+                return {'error': f'OpenAI import failed: {str(e)}'}
+            
+            client = OpenAI(api_key=api_key)
+            model = os.environ.get('OPENAI_GEN_MODEL', 'gpt-4o-mini')
+            
+            prompt = f"""Based on the following campaign brief, suggest 5 target audience segments for Amazon Ads.
 For each segment, provide:
 - segment_name: A descriptive name in Japanese
 - why_it_fits: 1-2 sentences explaining the fit (in Japanese)  
@@ -104,25 +118,33 @@ Campaign Brief: {campaign_brief}
 
 Respond ONLY with a JSON array of segment objects."""
 
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are an Amazon Ads strategist. Respond entirely in Japanese with valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=2000
-        )
-        
-        content = response.choices[0].message.content.strip()
-        
-        json_match = re.search(r'\[[\s\S]*\]', content)
-        if json_match:
-            segments = json.loads(json_match.group(0))
-        else:
-            segments = []
-        
-        return {
-            'segments': [],
-            'generated_segments': segments,
-            'total_found': len(segments)
-        }
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are an Amazon Ads strategist. Respond entirely in Japanese with valid JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2000
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Parse JSON from response
+            json_match = re.search(r'\[[\s\S]*\]', content)
+            if json_match:
+                segments = json.loads(json_match.group(0))
+            else:
+                segments = []
+            
+            return {
+                'segments': [],
+                'generated_segments': segments,
+                'total_found': len(segments)
+            }
+            
+        except Exception as e:
+            return {
+                'error': str(e),
+                'type': type(e).__name__,
+                'traceback': traceback.format_exc()
+            }
