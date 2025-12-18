@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import os
+# Trigger redeploy for vercel config update
 import sys
 
 # Add the parent directory to the Python path
