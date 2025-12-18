@@ -1,34 +1,44 @@
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
+from flask import Flask, request, jsonify
 import os
+import json
+import re
 
 app = Flask(__name__)
-CORS(app)
 
-@app.route('/')
+# Enable CORS manually
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+@app.route('/', methods=['GET'])
 def index():
-    try:
-        return send_from_directory('public', 'index.html')
-    except:
-        return jsonify({
-            'message': 'Amazon Ads Automation API',
-            'status': 'running',
-            'endpoints': ['/api/health', '/api/generate']
-        })
+    return jsonify({
+        'message': 'Amazon Ads Automation API',
+        'status': 'running',
+        'endpoints': {
+            'health': '/api/health',
+            'generate': '/api/generate (POST)'
+        }
+    })
 
-@app.route('/api/health')
-@app.route('/health')
+@app.route('/api/health', methods=['GET'])
+@app.route('/health', methods=['GET'])
 def health():
     return jsonify({
         'status': 'ok',
         'message': 'API is running on Vercel'
     })
 
-@app.route('/api/retrieve', methods=['POST'])
+@app.route('/api/retrieve', methods=['POST', 'OPTIONS'])
 def retrieve_segments():
-    """Retrieve segments based on campaign brief"""
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'})
+    
     try:
-        data = request.json or {}
+        data = request.get_json() or {}
         campaign_brief = data.get('campaign_brief', '').strip()
         
         if not campaign_brief:
@@ -37,11 +47,9 @@ def retrieve_segments():
         if len(campaign_brief) < 10:
             return jsonify({'error': 'Campaign brief must be at least 10 characters'}), 400
         
-        # For now, return a placeholder response
-        # The heavy processing with faiss should be done on a different backend
         return jsonify({
             'message': 'Segment retrieval requires backend with faiss support',
-            'note': 'Please use a local deployment or Railway/Render for full functionality',
+            'note': 'Use local deployment or Railway/Render for full vector search',
             'segments': [],
             'total_found': 0
         })
@@ -49,31 +57,30 @@ def retrieve_segments():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/generate', methods=['POST'])
+@app.route('/api/generate', methods=['POST', 'OPTIONS'])
 def generate_segments():
-    """Generate segments using OpenAI API"""
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'})
+    
     try:
-        data = request.json or {}
+        data = request.get_json() or {}
         campaign_brief = data.get('campaign_brief', '').strip()
         
         if not campaign_brief:
             return jsonify({'error': 'Campaign brief is required'}), 400
         
-        # Import OpenAI only when needed
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            return jsonify({'error': 'OPENAI_API_KEY not configured in Vercel environment'}), 500
+        
         try:
             from openai import OpenAI
-            import httpx
-        except ImportError:
-            return jsonify({'error': 'OpenAI package not available'}), 500
-        
-        api_key = os.getenv('OPENAI_API_KEY')
-        if not api_key:
-            return jsonify({'error': 'OPENAI_API_KEY not configured'}), 500
+        except ImportError as e:
+            return jsonify({'error': f'OpenAI import failed: {str(e)}'}), 500
         
         client = OpenAI(api_key=api_key)
-        model = os.getenv('OPENAI_GEN_MODEL', 'gpt-4o-mini')
+        model = os.environ.get('OPENAI_GEN_MODEL', 'gpt-4o-mini')
         
-        # Generate segments using OpenAI
         prompt = f"""Based on the following campaign brief, suggest 5 target audience segments for Amazon Ads.
 For each segment, provide:
 - segment_name: A descriptive name in Japanese
@@ -93,11 +100,8 @@ Respond ONLY with a JSON array of segment objects."""
             max_tokens=2000
         )
         
-        import json
         content = response.choices[0].message.content.strip()
         
-        # Parse JSON from response
-        import re
         json_match = re.search(r'\[[\s\S]*\]', content)
         if json_match:
             segments = json.loads(json_match.group(0))
@@ -113,5 +117,5 @@ Respond ONLY with a JSON array of segment objects."""
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# For Vercel, we need to export the app
-# The handler is automatically detected by Vercel for Flask apps
+# Vercel expects the app to be named 'app' for automatic detection
+# or we can use a handler function
