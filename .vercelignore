@@ -1,0 +1,11 @@
+# Ignore files not needed for Vercel serverless functions
+app.py
+12.py
+config.py
+ingest_index_json.py
+utils/
+Data/
+__pycache__/
+*.pyc
+.git/
+.vscode/
