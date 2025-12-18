@@ -11,6 +11,30 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def do_GET(self):
+        # Serve the HTML UI for root path
+        if self.path == '/':
+            try:
+                # Look for index.html in the parent directory (root) or current directory
+                html_path = os.path.join(os.path.dirname(__file__), '..', 'index.html')
+                if not os.path.exists(html_path):
+                    html_path = os.path.join(os.path.dirname(__file__), 'index.html')
+                
+                # Fallback to hardcoded HTML if file doesn't exist
+                if os.path.exists(html_path):
+                    with open(html_path, 'r', encoding='utf-8') as f:
+                        html_content = f.read()
+                else:
+                    html_content = self._get_fallback_html()
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(html_content.encode('utf-8'))
+                return
+            except Exception as e:
+                # Fall through to JSON error if HTML serving fails
+                print(f"Error serving HTML: {e}")
+
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self._send_cors_headers()
@@ -26,6 +50,7 @@ class handler(BaseHTTPRequestHandler):
                 'status': 'running',
                 'openai_key_configured': has_key,
                 'endpoints': {
+                    'ui': 'GET /',
                     'health': 'GET /api/health',
                     'generate': 'POST /api/generate'
                 }
@@ -148,3 +173,19 @@ Respond ONLY with a JSON array of segment objects."""
                 'type': type(e).__name__,
                 'traceback': traceback.format_exc()
             }
+
+    def _get_fallback_html(self):
+        return """<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Amazon Ads アシスタント (Fallback)</title>
+  <style>body{font-family:sans-serif;padding:2rem;text-align:center}</style>
+</head>
+<body>
+  <h1>Amazon Ads アシスタント</h1>
+  <p>Loading UI...</p>
+  <script>location.reload();</script>
+</body>
+</html>"""
