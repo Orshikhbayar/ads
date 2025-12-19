@@ -413,6 +413,7 @@ def _build_generation_prompt_json(campaign_brief: str, rows: List[dict]) -> str:
         )
 
     allowed_block = json.dumps(allowed_names, ensure_ascii=False)
+    segments_block = '\n\n'.join(blocks)
 
     sys_msg = (
         "You are an Amazon Ads strategist. Respond entirely in Japanese.\n"
@@ -428,7 +429,7 @@ def _build_generation_prompt_json(campaign_brief: str, rows: List[dict]) -> str:
 
     user_msg = (
         f"=== Campaign Brief ===\n{campaign_brief}\n\n"
-        f"=== Retrieved Segments (from your data) ===\n{'\n\n'.join(blocks)}\n\n"
+        f"=== Retrieved Segments (from your data) ===\n{segments_block}\n\n"
         f"=== Allowed Segment Names (use ALL {len(allowed_names)} names) ===\n{allowed_block}\n\n"
         f"Return JSON array with exactly {len(allowed_names)} objects in this shape:\n"
         "[\n"

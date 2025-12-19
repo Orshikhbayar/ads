@@ -158,7 +158,15 @@ Respond ONLY with a JSON array of segment objects."""
             # Parse JSON from response
             json_match = re.search(r'\[[\s\S]*\]', content)
             if json_match:
-                segments = json.loads(json_match.group(0))
+                raw_segments = json.loads(json_match.group(0))
+                # Transform to match frontend expectations
+                segments = []
+                for seg in raw_segments:
+                    segments.append({
+                        'name': seg.get('segment_name', '名前なしセグメント'),
+                        'why_fits': seg.get('why_it_fits', '説明がありません'),
+                        'keywords': seg.get('keywords', [])
+                    })
             else:
                 segments = []
             
