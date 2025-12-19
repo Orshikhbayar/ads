@@ -132,8 +132,9 @@ class handler(BaseHTTPRequestHandler):
             
             client = OpenAI(api_key=api_key)
             model = os.environ.get('OPENAI_GEN_MODEL', 'gpt-4o-mini')
+            top_k = int(data.get('top_k', 10))
             
-            prompt = f"""Based on the following campaign brief, suggest 5 target audience segments for Amazon Ads.
+            prompt = f"""Based on the following campaign brief, suggest {top_k} target audience segments for Amazon Ads.
 For each segment, provide:
 - segment_name: A descriptive name in Japanese
 - why_it_fits: 1-2 sentences explaining the fit (in Japanese)  
