@@ -3,6 +3,106 @@ import json
 import os
 import re
 import traceback
+import numpy as np
+
+# ------------------------------------
+# Load pre-computed embeddings and data
+# ------------------------------------
+_embeddings = None
+_keywords = None
+_docs = None
+_japan_map = None
+
+def _load_search_data():
+    """Load embeddings and document data for vector search"""
+    global _embeddings, _keywords, _docs, _japan_map
+    
+    if _embeddings is not None:
+        return True
+    
+    try:
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        
+        # Load embeddings
+        emb_path = os.path.join(base_dir, 'Data', 'embeddings.npz')
+        if os.path.exists(emb_path):
+            data = np.load(emb_path)
+            _embeddings = data['embeddings'].astype('float32')
+            # Normalize embeddings for cosine similarity
+            norms = np.linalg.norm(_embeddings, axis=1, keepdims=True) + 1e-12
+            _embeddings = _embeddings / norms
+        else:
+            return False
+        
+        # Load keywords/segment names
+        kw_path = os.path.join(base_dir, 'Data', 'keywords.json')
+        if os.path.exists(kw_path):
+            with open(kw_path, 'r', encoding='utf-8') as f:
+                _keywords = json.load(f)
+        
+        # Load docs for text content
+        docs_path = os.path.join(base_dir, 'Data', 'docs.jsonl')
+        if os.path.exists(docs_path):
+            _docs = []
+            with open(docs_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    _docs.append(json.loads(line))
+        
+        # Load Japanese name mapping
+        japan_path = os.path.join(base_dir, 'Data', 'japan.json')
+        if os.path.exists(japan_path):
+            with open(japan_path, 'r', encoding='utf-8') as f:
+                _japan_map = json.load(f)
+        else:
+            _japan_map = {}
+        
+        return True
+    except Exception as e:
+        print(f"Error loading search data: {e}")
+        return False
+
+def _get_embedding_openai(text, client, model="text-embedding-3-small"):
+    """Get embedding for query text using OpenAI"""
+    try:
+        response = client.embeddings.create(model=model, input=[text])
+        emb = np.array(response.data[0].embedding, dtype='float32')
+        # Normalize
+        emb = emb / (np.linalg.norm(emb) + 1e-12)
+        return emb
+    except Exception as e:
+        print(f"Embedding error: {e}")
+        return None
+
+def _search_segments(query_embedding, top_k=10):
+    """Search for similar segments using numpy cosine similarity"""
+    global _embeddings, _keywords, _docs, _japan_map
+    
+    if _embeddings is None or query_embedding is None:
+        return []
+    
+    # Compute cosine similarities (embeddings are already normalized)
+    similarities = np.dot(_embeddings, query_embedding)
+    
+    # Get top-k indices
+    top_indices = np.argsort(similarities)[::-1][:top_k]
+    
+    results = []
+    for idx in top_indices:
+        cosine = float(similarities[idx])
+        # Convert cosine (-1 to 1) to match percentage (0 to 100)
+        match_pct = round(max(0, min(1, (cosine + 1) / 2)) * 100, 1)
+        
+        keyword = _keywords[idx] if _keywords and idx < len(_keywords) else f"segment_{idx}"
+        jp_name = _japan_map.get(keyword, keyword) if _japan_map else keyword
+        
+        results.append({
+            'name': jp_name,
+            'match_percent': match_pct,
+            'keyword': keyword,
+            'text': _docs[idx].get('text', '') if _docs and idx < len(_docs) else ''
+        })
+    
+    return results
 
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -134,13 +234,32 @@ class handler(BaseHTTPRequestHandler):
             model = os.environ.get('OPENAI_GEN_MODEL', 'gpt-4o-mini')
             top_k = int(data.get('top_k', 10))
             
-            prompt = f"""Based on the following campaign brief, suggest {top_k} target audience segments for Amazon Ads.
-For each segment, provide:
-- segment_name: A descriptive name in Japanese
-- why_it_fits: 1-2 sentences explaining the fit (in Japanese)  
-- keywords: 10 relevant advertising keywords (in Japanese)
+            # --- Vector Search for real match percentages ---
+            segments_with_score = []
+            if _load_search_data():
+                # Get query embedding
+                query_emb = _get_embedding_openai(campaign_brief, client)
+                if query_emb is not None:
+                    segments_with_score = _search_segments(query_emb, top_k)
+            
+            # --- LLM Generation for segment details ---
+            # Build context from retrieved segments
+            segment_context = ""
+            if segments_with_score:
+                for i, seg in enumerate(segments_with_score[:5], 1):  # Use top 5 for context
+                    segment_context += f"{i}. {seg['name']} ({seg['match_percent']:.1f}%)\n"
+            
+            prompt = f"""Based on the following campaign brief and retrieved segments, provide details for {top_k} target audience segments for Amazon Ads.
 
 Campaign Brief: {campaign_brief}
+
+Retrieved Segments:
+{segment_context if segment_context else "(No segments retrieved)"}
+
+For each segment, provide:
+- segment_name: Use names from retrieved segments when applicable, or create descriptive names in Japanese
+- why_it_fits: 1-2 sentences explaining the fit (in Japanese)  
+- keywords: 10 relevant advertising keywords (in Japanese)
 
 Respond ONLY with a JSON array of segment objects."""
 
@@ -161,31 +280,22 @@ Respond ONLY with a JSON array of segment objects."""
                 raw_segments = json.loads(json_match.group(0))
                 # Transform to match frontend expectations
                 generated_segments = []
-                segments_with_score = []
-                base_score = 85.0  # Base match percentage
                 
                 for i, seg in enumerate(raw_segments):
                     name = seg.get('segment_name', '名前なしセグメント')
-                    # Generate declining match percentages for ranking
-                    match_pct = round(base_score - (i * 2.5), 1)
                     
                     generated_segments.append({
                         'name': name,
                         'why_fits': seg.get('why_it_fits', '説明がありません'),
                         'keywords': seg.get('keywords', [])
                     })
-                    segments_with_score.append({
-                        'name': name,
-                        'match_percent': max(match_pct, 50.0)  # Minimum 50%
-                    })
             else:
                 generated_segments = []
-                segments_with_score = []
             
             return {
-                'segments': segments_with_score,
+                'segments': segments_with_score,  # Real scores from vector search
                 'generated_segments': generated_segments,
-                'total_found': len(generated_segments)
+                'total_found': len(segments_with_score)
             }
             
         except Exception as e:
